@@ -1,0 +1,3 @@
+src/db.json
+src/settings_local.py
+*.pyc
