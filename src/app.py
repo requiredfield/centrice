@@ -59,8 +59,9 @@ class App():
   """
   @expose
   @role('*')
+  @mimetype('text/plain')
   def fetch_public(self,site):
-    return self.fetch(site=site,rank=0,status='up')
+    return self._fetch(site=site,rank=0,status='up')
 
   """
   Fetch domains by rank and status
@@ -77,6 +78,10 @@ class App():
   @role(['admin','mandator'])
   @mimetype('text/plain')
   def fetch(self,site,rank=0,status='up'):
+    return self._fetch(site=site,rank=rank,status=status)
+
+
+  def _fetch(self,site,rank=0,status='up'):
     if site not in self.db:
       raise HTTPError(404,"Site '"+site+"' not found")
 
