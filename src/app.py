@@ -40,7 +40,8 @@ class App():
   def sync_db(self):
     data = dict()
     for k in self.db:
-      data[k] = map(lambda d:d._asdict(),self.db[k])
+      data[k] = filter(lambda d:d.status =='up',self.db[k]) # current only save active domains
+      data[k] = map(lambda d:d._asdict(),data[k])
 
     indent = None
     if self._debug:
