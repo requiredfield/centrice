@@ -1,5 +1,17 @@
 # -*- coding: UTF-8 -*-
-import cherrypy,settings
+import cherrypy,settings,threading
+
+
+lock = threading.Lock()
+
+def threadLock(f):
+  def _decor(*args,**kwargs):
+    lock.acquire()
+    ret = f(*args,**kwargs)
+    lock.release()
+    return ret
+  return _decor
+
 
 # Simple RBAC decorator
 def role(roleNameList): # roleNameList: "*" | ["roleName"]

@@ -6,6 +6,7 @@ from cherrypy.lib import auth_basic
 from cherrypy import expose,HTTPError
 from utils import *
 
+
 """
 DB_FILE Schema:
   type DB = SiteDomainMap
@@ -101,6 +102,7 @@ class App():
   @expose
   @role(['admin','mandator'])
   @mimetype('text/plain')
+  @threadLock
   def update(self,site,urls,status='up'):
     """
     if cherrypy.request.method != 'POST':
