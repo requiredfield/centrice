@@ -111,6 +111,8 @@ class App():
     urls = re.split('[,\s]+',urls)
     domains = []; origins = [];
     for url in urls:
+      if not url:
+        continue
       if url[-1]=='/':
         url = url[0:-1]
       origins.append(url)
