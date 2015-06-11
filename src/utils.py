@@ -7,8 +7,10 @@ lock = threading.Lock()
 def threadLock(f):
   def _decor(*args,**kwargs):
     lock.acquire()
-    ret = f(*args,**kwargs)
-    lock.release()
+    try:
+      ret = f(*args,**kwargs)
+    finally:
+      lock.release()
     return ret
   return _decor
 
