@@ -23,7 +23,7 @@ port = 1988
 ssl_certificate = ''
 ssl_private_key = ''
 
-DB_FILE_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)),'db.json')
+DB_FILE_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)),'db.sqlite3')
 
 
 from settings_local import *

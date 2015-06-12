@@ -13,7 +13,7 @@ Mirror Domain Distribution Central Service
       For example: /domains/fetch_public?site=cdt
 
       Output:
-        URL origin list seperated by line feed char
+        Domain list seperated by line feed char
 
 2.  Fetch domains by rank and status
       GET /domains/fetch?site=$site_id&rank=0&status=up
@@ -21,16 +21,16 @@ Mirror Domain Distribution Central Service
           site: The site id, required
           rank: The domain rank, default is 0, i.e. public.
           status: The accessible status, default is up,i.e. not blocked.
-                  Enum(up|down|all)
+                  Enum(up|down)
       Output:
-        URL origin list seperated by line feed char
+        Domain list seperated by line feed char
 
 3.  Update site domains
       POST /domains/update
-      Body: site=$site_id&status=up&urls=http://a.example.com,http://b.example.com
+      Body: site=$site_id&status=up&domains=a.example.com,b.example.com
         Params:
           site, status: Same as `fetch` API
-          urls: URL origin split by comma
+          domains: Domains seperated by comma
       Output:
         200 status code indicate success, otherwise error occurs.
 </pre>

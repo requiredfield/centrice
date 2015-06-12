@@ -1,54 +1,32 @@
 #!/usr/bin/env python
 # -*- coding: UTF-8 -*-
-import cherrypy,settings,json,os,re
-from collections import namedtuple
+import cherrypy,settings,json,os,re,sqlite3
 from cherrypy.lib import auth_basic
 from cherrypy import expose,HTTPError
 from utils import *
 
 
-"""
-DB_FILE Schema:
-  type DB = SiteDomainMap
-  type SiteDomainMap = { SiteID => Set(SiteDomain) }
-  type SiteID = String
-  type SiteDomain = NamedTuple('SiteDomain',
-                      [
-                        'origin', // URLOrigin
-                        'rank',   // UnsignedInt , default is 0, means public
-                        'status'  // Enum("up"|"down") , default is "up"
-                      ])
-  type URLOrigin = String // e.g. "https://sub.cloudfront.com"
-"""
-SiteDomain = namedtuple('SiteDomain',['origin','rank','status'])
-
-
 class App():
   def __init__(self):
-    if not os.path.exists(settings.DB_FILE_PATH):
-      file(settings.DB_FILE_PATH,'wb').write('{}')
-    data = json.load(file(settings.DB_FILE_PATH))
-    for k in data:
-      data[k] = set(map(lambda d: SiteDomain(**d),data[k]))
-
-    self.db = data
-
+    self._init_database()
     self._debug = True
     if settings.environment == 'production':
       self._debug = False
 
-
-  def sync_db(self):
-    data = dict()
-    for k in self.db:
-      data[k] = filter(lambda d:d.status =='up',self.db[k]) # current only save active domains
-      data[k] = map(lambda d:d._asdict(),data[k])
-
-    indent = None
-    if self._debug:
-      indent = 2
-    data = json.dumps(data,sort_keys=True,indent=indent)
-    file(settings.DB_FILE_PATH,'wb').write(data)
+  def _init_database(self):
+    db = sqlite3.connect(settings.DB_FILE_PATH)
+    cursor = db.cursor()
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS MirrorDomain (
+      domain TEXT PRIMARY KEY NOT NULL,
+      site TEXT NOT NULL,
+      rank INTEGER NOT NULL,
+      status TEXT NOT NULL
+    )''')
+    cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS domain_index ON MirrorDomain(domain)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS query_index ON MirrorDomain(site,status,rank)')
+    db.commit()
+    db.close()
 
   """
   Fetch accessible domains in the default public rank
@@ -57,7 +35,7 @@ class App():
       site: The site id, required
 
   Output:
-    URL origin list seperated by line feed char
+    Domain list seperated by line feed char
   """
   @expose
   @role('*')
@@ -72,9 +50,9 @@ class App():
       site: The site id, required
       rank: The domain rank, default is 0, i.e. public.
       status: The accessible status, default is up,i.e. not blocked.
-              Enum(up|down|all)
+              Enum(up|down)
   Output:
-    URL origin list seperated by line feed char
+    Domain list seperated by line feed char
   """
   @expose
   @role(['admin','mandator'])
@@ -82,55 +60,42 @@ class App():
   def fetch(self,site,rank=0,status='up'):
     return self._fetch(site=site,rank=rank,status=status)
 
-
   def _fetch(self,site,rank=0,status='up'):
-    if site not in self.db:
-      raise HTTPError(404,"Site '"+site+"' not found")
-
-    domains = self.db[site]
-    domains = filter(lambda d: (status == 'all' or d.status == status) and d.rank == rank,domains)
-    return "\n".join(map(lambda d:d.origin,domains))
+    db = sqlite3.connect(settings.DB_FILE_PATH)
+    cursor = db.cursor()
+    cursor.execute('SELECT domain FROM MirrorDomain WHERE site=? AND rank=? AND status=?',(site,rank,status))
+    domains = map(lambda t:t[0],cursor.fetchall())
+    db.close()
+    return "\n".join(domains)
 
 
   """
-  POST /domains/update
-    Body:site=xxx&status=up&urls=http://a.example.com,http://b.example.com
+  POST /domains/update/
+    Body:site=xxx&status=up&domains=a.example.com,b.example.com
     Params:
       site, status: Same as `fetch` API
-      urls: URL origin split by comma
+      domains: domain split by comma
   """
   @expose
   @role(['admin','mandator'])
   @mimetype('text/plain')
-  @threadLock
-  def update(self,site,urls,status='up'):
+  def update(self,site,domains,status='up'):
+    if status != 'up':
+      status =  'down'
+
+    db = sqlite3.connect(settings.DB_FILE_PATH)
+    cursor = db.cursor()
     """
     if cherrypy.request.method != 'POST':
       raise HTTPError(400,'Bad Request, Not POST')
     """
-    urls = re.split('[,\s]+',urls)
-    domains = []; origins = [];
-    for url in urls:
-      if not url:
-        continue
-      if url[-1]=='/':
-        url = url[0:-1]
-      origins.append(url)
-      d = SiteDomain(origin=url,rank=0,status=status)
-      domains.append(d)
-
-    origins = set(origins)
-    if site in self.db:
-      existsDomains = self.db[site]
-      for d in existsDomains:
-        if d.origin in origins:
-          pass
-        else:
-          domains.append(d)
-
-    domains = set(domains)
-    self.db[site] = domains
-    self.sync_db()
+    domains = re.split('[,\s]+',domains)
+    domains = filter(lambda x:x,domains)
+    rank = 0
+    updates = map(lambda domain:(domain,site,status,rank),domains)
+    cursor.executemany('INSERT OR REPLACE INTO MirrorDomain(domain,site,status,rank) values(?,?,?,?)',updates)
+    db.commit()
+    db.close()
     return "OK"
 
 
@@ -138,9 +103,9 @@ class App():
   @role(['admin','mandator'])
   def submitForm(self):
     return '''
-    <form action="../update/" method="POST" style="width:50em;margin:4em auto;">
+    <form action="/domains/update/" method="POST" style="width:50em;margin:4em auto;">
       <p><label>Site ID: <input type="text" name="site"/></label></p>
-      <p><label>Urls split by comma: </br><textarea name="urls" style="width:40em;height:10em;"></textarea></label></p>
+      <p><label>Domains split by comma or newline: </br><textarea name="domains" style="width:40em;height:10em;"></textarea></label></p>
       <p><label>Status:
         <select name="status">
           <option value="up" selected="selected">Up</option>
