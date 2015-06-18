@@ -6,7 +6,8 @@ from cherrypy import expose,HTTPError
 from utils import *
 
 
-class App():
+class Domains():
+  exposed = True
   def __init__(self):
     self._init_database()
     self._debug = True
@@ -20,102 +21,106 @@ class App():
     CREATE TABLE IF NOT EXISTS MirrorDomain (
       domain TEXT PRIMARY KEY NOT NULL,
       site TEXT NOT NULL,
-      rank INTEGER NOT NULL,
-      status TEXT NOT NULL
+      rank INTEGER NOT NULL DEFAULT 0,
+      blocked BOOLEAN NOT NULL DEFAULT false,
+      cdate TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )''')
-    cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS domain_index ON MirrorDomain(domain)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS query_index ON MirrorDomain(site,status,rank)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS query_index ON MirrorDomain(site,blocked,rank)')
     db.commit()
     db.close()
 
-  """
-  Fetch accessible domains in the default public rank
-  GET /domains/fetch_public?site=getlantern
-    Params:
-      site: The site id, required
-
-  Output:
-    Domain list seperated by line feed char
-  """
-  @expose
-  @role('*')
-  @mimetype('text/plain')
-  def fetch_public(self,site):
-    return self._fetch(site=site,rank=0,status='up')
 
   """
-  Fetch domains by rank and status
-  GET /domains/fetch?site=getlantern&rank=0&status=up
+  GET site domains by rank and status
+  GET /domains/$site/?status=up&rank=0
     Params:
       site: The site id, required
       rank: The domain rank, default is 0, i.e. public.
       status: The accessible status, default is up,i.e. not blocked.
               Enum(up|down)
+
   Output:
     Domain list seperated by line feed char
   """
-  @expose
-  @role(['admin','mandator'])
   @mimetype('text/plain')
-  def fetch(self,site,rank=0,status='up'):
-    return self._fetch(site=site,rank=rank,status=status)
+  def GET(self,site,status='up',rank='0'):
+    blocked = status == 'down'
+    try:
+      rank = int(rank)
+    except ValueError:
+      rank = 0
+    if rank != 0:
+      role(['admin','mandator'])(lambda *args,**kwargs:self._fetch(*args,**kwargs))(site,blocked,rank)
+    else:
+      return self._fetch(site,blocked,rank)
 
-  def _fetch(self,site,rank=0,status='up'):
+  def _fetch(self,site,blocked,rank):
     db = sqlite3.connect(settings.DB_FILE_PATH)
     cursor = db.cursor()
-    cursor.execute('SELECT domain FROM MirrorDomain WHERE site=? AND rank=? AND status=?',(site,rank,status))
+    cursor.execute('SELECT domain FROM MirrorDomain WHERE site=? AND rank=? AND blocked=?',(site,rank,blocked))
     domains = map(lambda t:t[0],cursor.fetchall())
     db.close()
-    return "\n".join(domains)
+    return "\n".join(domains) + "\n"
 
 
   """
-  POST /domains/update/
-    Body:site=xxx&status=up&domains=a.example.com,b.example.com
+  PUT /domains/$site/
+    Body:up=a.example.com,b.example.com&down=x.example.com
     Params:
-      site, status: Same as `fetch` API
-      domains: domain split by comma
+      site: The site ID
+      up: up domain split by comma or space
+      down: down domain split by comma or space
   """
-  @expose
   @role(['admin','mandator'])
   @mimetype('text/plain')
-  def update(self,site,domains,status='up'):
-    if status != 'up':
-      status =  'down'
-
+  def POST(self,site,up,down):
     db = sqlite3.connect(settings.DB_FILE_PATH)
     cursor = db.cursor()
-    """
-    if cherrypy.request.method != 'POST':
-      raise HTTPError(400,'Bad Request, Not POST')
-    """
-    domains = re.split('[,\s]+',domains)
-    domains = filter(lambda x:x,domains)
-    rank = 0
-    updates = map(lambda domain:(domain,site,status,rank),domains)
-    cursor.executemany('INSERT OR REPLACE INTO MirrorDomain(domain,site,status,rank) values(?,?,?,?)',updates)
+
+    up_domains = filter(None,set(re.split('[,\s]+',up)))
+    down_domains = filter(None,set(re.split('[,\s]+',down)))
+
+    cursor.execute('DELETE FROM MirrorDomain WHERE site=:site',{"site":site})
+
+    blocked = False
+    updates = map(lambda domain:(domain,site,blocked),up_domains)
+    cursor.executemany('INSERT OR REPLACE INTO MirrorDomain(domain,site,blocked) values(?,?,?)',updates)
+
+    blocked = True
+    updates = map(lambda domain:(domain,site,blocked),down_domains)
+    cursor.executemany('INSERT OR REPLACE INTO MirrorDomain(domain,site,blocked) values(?,?,?)',updates)
+
     db.commit()
     db.close()
-    return "OK"
+    return "OK\n"
 
 
-  @expose
   @role(['admin','mandator'])
-  def submitForm(self):
+  @mimetype('text/plain')
+  def DELETE(self):
+    sql = "DELETE FROM MirrorDomain WHERE cdate <= DATETIME('now','-1 day')"
+    db = sqlite3.connect(settings.DB_FILE_PATH)
+    cursor = db.cursor()
+    cursor.execute(sql)
+    db.commit()
+    db.close()
+    return "DELETED\n"
+
+
+class SubmitForm():
+  exposed = True
+
+  @role(['admin','mandator'])
+  def GET(self):
     return '''
-    <form action="/domains/update/" method="POST" style="width:50em;margin:4em auto;">
+    <form action="/domains/" method="POST" style="width:50em;margin:4em auto;">
       <p><label>Site ID: <input type="text" name="site"/></label></p>
-      <p><label>Domains split by comma or newline: </br><textarea name="domains" style="width:40em;height:10em;"></textarea></label></p>
-      <p><label>Status:
-        <select name="status">
-          <option value="up" selected="selected">Up</option>
-          <option value="down">Down</option>
-        </select>
-      </label></p>
+      <p><label>Up Domains split by comma or newline: </br><textarea name="up" style="width:40em;height:10em;"></textarea></label></p>
+      <p><label>Down Domains split by comma or newline: </br><textarea name="down" style="width:40em;height:10em;"></textarea></label></p>
       <p><input type="submit"  value="Submit"/></p>
     </form>
-    '''
 
+    '''
 
 
 def validate_password(realm,username, password):
@@ -123,22 +128,28 @@ def validate_password(realm,username, password):
      return True
   return False
 
-conf = {
-  '/': {
-    'tools.auth_basic.on': True,
-    'tools.auth_basic.realm': 'localhost',
-    'tools.auth_basic.checkpassword': validate_password
-  }
-}
-cherrypy.config.update({
-  'server.ssl_module':'builtin',
-  'server.ssl_certificate':settings.ssl_certificate,
-  'server.ssl_private_key':settings.ssl_private_key,
-  'server.socket_host': settings.host,
-  'server.socket_port': settings.port,
-  'environment': settings.environment
-})
-
 
 if __name__ == '__main__':
-   cherrypy.quickstart(App(),'/domains/',conf)
+  conf = {
+    '/': {
+      'tools.auth_basic.on': True,
+      'tools.auth_basic.realm': 'localhost',
+      'tools.auth_basic.checkpassword': validate_password,
+      'request.dispatch': cherrypy.dispatch.MethodDispatcher()
+    }
+  }
+  cherrypy.config.update({
+    'server.ssl_module':'builtin',
+    'server.ssl_certificate':settings.ssl_certificate,
+    'server.ssl_private_key':settings.ssl_private_key,
+    'server.socket_host': settings.host,
+    'server.socket_port': settings.port,
+    'environment': settings.environment
+  })
+  cherrypy.tree.mount(Domains(), '/domains/',conf)
+  cherrypy.tree.mount(SubmitForm(), '/domain-submit-form/',conf)
+  cherrypy.engine.start()
+  cherrypy.engine.block()
+
+
+
